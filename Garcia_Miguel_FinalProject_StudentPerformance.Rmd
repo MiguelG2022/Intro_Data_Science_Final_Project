@@ -1,0 +1,298 @@
+---
+title: "Final Project: Student Performance"
+author: "Miguel Garcia" 
+date: "December 4, 2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+  The data set "Students Performance" measures the math, reading, and writing exam scores of 1000 students. It contains 5 other variables which contain information about their gender, race/ethnicity, parental level of education, lunch status, and test preparation. The objective is to create a model that predicts whether the student will pass or fail their exams given their backgrounds. Another objective is to see how these different variables affect the student's test scores. To achieve this goal, several tidyverse packages have been loaded in to help visualize, transform, read and model the data. The "partykit" and "modelr" packages are used for creating the model and predictions. Lastly, The "reshape2" package will be used to have transform the data so it can be used for creating multiple box plots.    
+  
+```{r, warning = FALSE, message = FALSE}
+library(tidyverse)
+library(dplyr)
+library(tidyr)
+library("reshape2")
+library("partykit")
+library(modelr)
+```
+  
+## Data
+The data set was posted as a csv file on Kaggle. The first step was importing the data set and looking for any irregularities. Fortunately, the data set is already tidy as each row corresponds to an observation, each column corresponds to a variable, and each entry only contains a single value. 
+
+```{r, results = "hide"}
+student_performance<- read_csv("StudentsPerformance.csv")
+```
+
+```{r}
+student_performance
+```
+
+Although the data is tidy, it still needs to be transformed to complete the objectives. We need to rename the variables for easier data manipulation and add a surrogate key named id. We need to add a variable avgscore which takes the average of math, reading, and writing scores. We will use this new variable to mark whether the student passed or failed. The variable grade marks the student as pass if their average score is greater than 60, otherwise it marks it as fail. Hard_grade marks students as pass if all their scores are above 60, otherwise they are marked as fail. The variables grad and hgrad represent grade and hard_grade respectively in numeric form. 1 represents pass while 0 represents fail. The last step was ordering the levels of parent education.
+
+```{r}
+educ_level<-c("some high school","high school","some college","associate's degree","bachelor's degree","master's degree")
+stu_perf_edited<-student_performance%>%
+  rename(parenteduc="parental level of education", testprep="test preparation course", math_score="math score", reading_score="reading score",writing_score= "writing score",race="race/ethnicity")%>%
+  mutate(id = row_number())%>%
+  select(id, everything())%>%
+  mutate(avgscore=(math_score+writing_score+reading_score)/3)%>%
+  mutate(grade= case_when(avgscore>=60 ~ "pass",avgscore<60 ~ "fail"))%>%
+  mutate(hard_grade= case_when(math_score>=60 & reading_score>=60 & writing_score>=60 ~ "pass",math_score<60 | reading_score<60 | writing_score<60 ~ "fail"))%>%
+  mutate(grad= case_when(avgscore>=60 ~ 1,avgscore<60 ~ 0))%>%
+  mutate(hgrad= case_when(math_score>=60 & reading_score>=60 & writing_score>=60 ~ 1,math_score<60 | reading_score<60 | writing_score<60 ~ 0))%>%
+   mutate(parenteduc=factor(parenteduc,level=educ_level))
+```
+
+71.5% percent of the students pass in this data using the lenient grading system. If we predict everyone passes, we will be right 71.5% of the time so this is the baseline solution. The baseline solution for the hard grading system is 60.3%. The goal is for the model to get a better percentage correct than the baseline solutions.
+```{r}
+stu_perf_edited %>% summarize(pass_rate = mean(grad, na.rm = TRUE))
+stu_perf_edited %>% summarize(pass_rate = mean(hgrad, na.rm = TRUE))
+```
+
+The model we will be using later on does not accept characters so we will change the variables to factors from characters. 
+
+```{r}
+stu_perf_fcts<-stu_perf_edited%>%
+  mutate(hard_grade = factor(hard_grade))%>%
+  mutate(grade = factor(grade))%>%
+  mutate(lunch = factor(lunch))%>%
+  mutate(testprep = factor(testprep))%>%
+  mutate(race = factor(race))%>%
+  mutate(gender = factor(gender))%>%
+  select(hard_grade,race,parenteduc,lunch,testprep,gender,grade)
+```
+
+
+
+## Demographic: 
+We want to get an understanding of the students and how they are represented by the different categories. Here we split up the bar chart by gender and noticed there are more females than males but the difference is not significant. Additionally, the bar chart and table with proportions shows the majority of students are either from the race D or C. Race B and E come after. Race A is the clear minority.    
+
+
+```{r,fig.height=2,fig.width=4}
+stu_perf_edited%>%
+  ggplot(aes(fill=race))+
+  geom_bar(aes(gender))+
+  ylab("# of students")+
+  coord_flip()
+
+```
+
+```{r}
+stu_perf_edited%>%
+  group_by(race)%>%
+  summarise(n=n(),prop=n/1000)%>%
+  arrange(desc(prop))
+```
+
+This bar chart is arranged in the order of education level with lowest at bottom. The majority of student's parents have an associate's degree, some college, highschool, highschool education level. The minority education level would be bachelor's degree and master's degree. Also, the majority of students are on standard lunch. It appears the student's parent education is not indicative of whether the student will be on standard or free/reduced lunch. 
+
+```{r, echo = FALSE, fig.height=2,fig.width=4}
+stu_perf_edited%>%
+  ggplot()+
+  geom_bar(aes(parenteduc, fill=lunch))+
+  xlab("Parent education level")+
+  ylab("# of students")+
+  coord_flip()
+```
+
+```{r, echo = FALSE}
+stu_perf_edited%>%
+  group_by(parenteduc)%>%
+  summarise(n=n(),prop=n/1000)%>%
+  arrange(desc(prop))
+```
+
+The majority of students did not complete the test prep and the ratio for incomplete to complete is about 2:1. 
+```{r, echo = FALSE, fig.height=2, fig.width=4}
+stu_perf_edited%>%
+  ggplot()+
+  geom_bar(aes(testprep))+
+  xlab("Test preparation")+
+  ylab("# of students")+
+  coord_flip()
+
+```
+
+```{r, echo = FALSE}
+stu_perf_edited%>%
+  group_by(testprep)%>%
+  summarise(n=n(),prop=n/1000)%>%
+  arrange(desc(prop))
+```
+
+## Data Visualizations: 
+
+Below we use a box plot to depict the variation of math, writing, and reading scores given the different descriptive variables. Also we calculate the average scores for the students by grouping them using the 5 descriptive variables about the student's background. From the average scores and the box plot one can see that students with certain backgrounds perform better than students with other backgrounds. For example, one would expect the best performing student's background to be one who has standard lunch, completes the test preparation, has parents who have a master's degree, is female, and is part of group E. One would expect the worst performing student's background to be one who has free/reduced lunch, has not completed the test preparation, has parent's who have high school education, is male, and is part of group A. The variable with the greatest difference between highest and lowest mean for exam scores is parent education. The variable with the smallest difference between highest and lowest mean for exam scores is gender.   
+
+```{r, fig.height=3, fig.width=6}
+stu_perf_long_peduc<-stu_perf_edited%>%
+  select(math_score,writing_score,reading_score,parenteduc)%>%
+  melt(id = "parenteduc")
+
+stu_perf_long_peduc %>% ggplot(aes(x=variable,y=value,color=parenteduc))+
+  geom_boxplot()+
+  xlab("Type of exam")+
+  ylab("Exam score")+
+  ggtitle("Performance given parent education level")
+  
+```
+
+```{r, echo = FALSE, fig.height=3,fig.width=6}
+
+stu_perf_long_tp<-stu_perf_edited%>%
+  select(math_score,writing_score,reading_score,testprep)%>%
+  melt(id = "testprep")
+
+stu_perf_long_tp %>% ggplot(aes(x=variable,y=value,color=testprep))+
+  geom_boxplot()+
+  xlab("Type of exam")+
+  ylab("Exam score")+
+  ggtitle("Performance given test prep level")
+
+stu_perf_long_l<-stu_perf_edited%>%
+  select(math_score,writing_score,reading_score,lunch)%>%
+  melt(id = "lunch")
+
+stu_perf_long_l %>% ggplot(aes(x=variable,y=value,color=lunch))+
+  geom_boxplot()+
+  xlab("Type of exam")+
+  ylab("Exam score")+
+  ggtitle("Performance given lunch level")
+
+stu_perf_long_r<-stu_perf_edited%>%
+  select(math_score,writing_score,reading_score,race)%>%
+  melt(id = "race")
+
+stu_perf_long_r %>% ggplot(aes(x=variable,y=value,color=race))+
+  geom_boxplot()+
+  xlab("Type of exam")+
+  ylab("Exam score")+
+    ggtitle("Performance given race")
+
+
+stu_perf_long_g<-stu_perf_edited%>%
+  select(math_score,writing_score,reading_score,gender)%>%
+  melt(id = "gender")
+
+stu_perf_long_g %>% ggplot(aes(x=variable,y=value,color=gender))+
+  geom_boxplot()+
+  xlab("Type of exam")+
+  ylab("Exam score")+
+  ggtitle("Performance given gender")
+
+
+```
+
+
+
+```{r,fig.height=2,fig.width=4}
+stu_perf_edited%>%
+  group_by(lunch)%>%
+  summarize(avg_math_score=mean(math_score),avg_writing_score=mean(writing_score),avg_reading_score=mean(reading_score))%>%
+  arrange(desc(avg_math_score,avg_writing_score,avg_reading_score))
+```
+
+```{r, echo = FALSE}
+stu_perf_edited%>%
+  group_by(testprep)%>%
+  summarize(avg_math_score=mean(math_score),avg_writing_score=mean(writing_score),avg_reading_score=mean(reading_score))%>%
+  arrange(desc(avg_math_score,avg_writing_score,avg_reading_score))
+
+stu_perf_edited%>%
+  group_by(parenteduc)%>%
+  summarize(avg_math_score=mean(math_score),avg_writing_score=mean(writing_score),avg_reading_score=mean(reading_score))%>%
+  arrange(desc(avg_math_score,avg_writing_score,avg_reading_score))
+
+stu_perf_edited%>%
+  group_by(gender)%>%
+  summarize(avg_math_score=mean(math_score),avg_writing_score=mean(writing_score),avg_reading_score=mean(reading_score))%>%
+  arrange(desc(avg_math_score,avg_writing_score,avg_reading_score))
+
+stu_perf_edited%>%
+  group_by(race)%>%
+  summarize(avg_math_score=mean(math_score),avg_writing_score=mean(writing_score),avg_reading_score=mean(reading_score))%>%
+  arrange(desc(avg_math_score,avg_writing_score,avg_reading_score))
+
+```
+
+
+# Model for Pass Rate
+
+In our previous examination of the different variables we noticed the greatest difference between highest and lowest mean for exam scores is parent education. In the bar charts we notice how the different levels in parent education affect the pass rate of the students in the lenient grading system and the hard system. The bar chart shows in the hard grading system students whose parents have a bachelor's degree have the highest pass rate and students whose parents have a high school education have the lowest passing rate. In the lenient grading system students whose parents have a master's degree have the highest pass rate and students whose parents have a high school education have the lowest passing rate. The pass rate in general is a lot lower in the hard system as it is less forgiving because it fails the student if they fail one class. 
+
+```{r}
+stu_perf_edited %>%
+  ggplot(aes(x = parenteduc, fill = hard_grade))+
+  geom_bar(position = "fill")+
+  xlab("Parent education level")+
+  ylab("Pass rate")+
+  theme(axis.text = element_text(size=7,colour = "black"))
+```
+
+```{r, echo = FALSE}
+stu_perf_edited %>%
+  ggplot(aes(x = parenteduc, fill = grade))+
+  geom_bar(position = "fill")+
+  xlab("Parent education level")+
+  ylab("Pass rate")+
+  theme(axis.text = element_text(size=7,colour = "black"))
+```
+
+
+For the model we will be using a conditional inference tree. We will be using all 5 variables as predictors in this model in order to get the best result possible. We will be creating a model for both the lenient grading system and the hard grading system to see if we can predict whether a student passes or fails. 
+
+
+```{r} 
+set.seed(123456)
+
+cf_model1 <- cforest(grade ~ parenteduc+race+lunch+testprep+gender,  data = stu_perf_fcts)
+
+train1_pred <- stu_perf_fcts %>%
+add_predictions(cf_model1)
+
+#train1_pred %>% select(grade, pred)
+
+train1_pred %>%
+mutate(right = (grade == pred)) %>%
+summarize(grade_pred_correct=mean(right))
+
+
+cf_model2 <- cforest(hard_grade ~ parenteduc+race+lunch+testprep+gender, data = stu_perf_fcts)
+
+train2_pred <- stu_perf_fcts %>%
+add_predictions(cf_model2)
+
+#train2_pred %>% select(hard_grade, pred)
+
+train2_pred %>%
+mutate(right = (hard_grade == pred)) %>%
+summarize(hard_grade_pred_correct=mean(right))
+
+```
+The model for the lenient grading system is right 76.1% of the time which is better than the base solution of 71.5%. 
+The model for the hard grading system is right 69.5% of the time which is better than the base solution of 60.3%. 
+
+
+# Conclusion
+The first objective of this project was to create a model to predict whether the student will pass or fail their exam. With our conditional inference tree model we were able to generate results that were better than the baseline solution for both the lenient and hard grading system. One thing to keep in mind is we do not have a separate test data set so we will only be able to test it with the training set. This means our model will perform better than it would for a test data set. The other objective was to see how the different variable's affect the level student's test scores. We found out the level of the student's parent education has the greatest effect and gender has the smallest effect. We can see that a student's background is indicative of how a student will perform. Although the school can't change the a student's race, gender, parent education level or lunch level, the school can work on making sure everyone completes the test preparation as it did affect how well the student performed. It is important for the school to acknowledge that some students in the school will be at a disadvantage due to factors they can not control and the school should do its best to make a difference where it can.           
+
+
+
+  
+  
+
+
+     
+
+
+
+
+
+
+
